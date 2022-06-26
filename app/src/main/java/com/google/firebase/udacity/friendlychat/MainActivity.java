@@ -1,18 +1,3 @@
-/**
- * Copyright Google Inc. All Rights Reserved.
- * <p/>
- * Licensed under the Apache License, Version 2.0 (the "License");
- * you may not use this file except in compliance with the License.
- * You may obtain a copy of the License at
- * <p/>
- * http://www.apache.org/licenses/LICENSE-2.0
- * <p/>
- * Unless required by applicable law or agreed to in writing, software
- * distributed under the License is distributed on an "AS IS" BASIS,
- * WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
- * See the License for the specific language governing permissions and
- * limitations under the License.
- */
 package com.google.firebase.udacity.friendlychat;
 
 import android.content.Intent;
@@ -39,6 +24,8 @@ import androidx.appcompat.app.AppCompatActivity;
 
 import com.firebase.ui.auth.AuthUI;
 import com.google.android.gms.tasks.OnCompleteListener;
+import com.google.android.gms.tasks.OnFailureListener;
+import com.google.android.gms.tasks.OnSuccessListener;
 import com.google.android.gms.tasks.Task;
 import com.google.firebase.auth.FirebaseAuth;
 import com.google.firebase.auth.FirebaseUser;
@@ -48,13 +35,17 @@ import com.google.firebase.database.DatabaseError;
 import com.google.firebase.database.DatabaseReference;
 import com.google.firebase.database.FirebaseDatabase;
 import com.google.firebase.messaging.FirebaseMessaging;
+import com.google.firebase.remoteconfig.FirebaseRemoteConfig;
+import com.google.firebase.remoteconfig.FirebaseRemoteConfigSettings;
 import com.google.firebase.storage.FirebaseStorage;
 import com.google.firebase.storage.StorageReference;
 
 import java.io.ByteArrayOutputStream;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class MainActivity extends AppCompatActivity {
 
@@ -62,6 +53,7 @@ public class MainActivity extends AppCompatActivity {
 
     public static final String ANONYMOUS = "anonymous";
     public static final int DEFAULT_MSG_LENGTH_LIMIT = 1000;
+    public static final String FRIENDLY_MSG_LENGTH_KEY = "friendly_msg_length";
 
     private ListView mMessageListView;
     private MessageAdapter mMessageAdapter;
@@ -81,6 +73,7 @@ public class MainActivity extends AppCompatActivity {
     private FirebaseAuth.AuthStateListener mAuthStateListener;
     private FirebaseStorage mFirebaseStorage;
     private StorageReference mChatPhotosStorageReference;
+    private FirebaseRemoteConfig firebaseRemoteConfig;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -93,6 +86,7 @@ public class MainActivity extends AppCompatActivity {
         mFirebaseDatabase = FirebaseDatabase.getInstance();
         mFirebaseAuth = FirebaseAuth.getInstance();
         mFirebaseStorage = FirebaseStorage.getInstance();
+        firebaseRemoteConfig = FirebaseRemoteConfig.getInstance();
 
         //Used to get the access of the specific part of the database
         mMessageDatabaseReference = mFirebaseDatabase.getReference().child("messages");
@@ -193,7 +187,24 @@ public class MainActivity extends AppCompatActivity {
                         Log.e(TAG, token);
                     }
                 });
-    }
+
+        // Create Remote Config Setting to enable developer mode.
+        // Fetching configs from the server is normally limited to 5 requests per hour.
+        // Enabling developer mode allows many more requests to be made per hour, so developers
+        // can test different config values during development.
+        FirebaseRemoteConfigSettings configSettings = new FirebaseRemoteConfigSettings.Builder()
+                .setFetchTimeoutInSeconds(3600)
+                .build();
+
+        firebaseRemoteConfig.setConfigSettingsAsync(configSettings);
+
+        // Define default config values. Defaults are used when fetched config values are not
+        // available. Eg: if an error occurred fetching values from the server.
+        Map<String,Object> defaultConfigMap = new HashMap<>();
+        defaultConfigMap.put(FRIENDLY_MSG_LENGTH_KEY, DEFAULT_MSG_LENGTH_LIMIT);
+        firebaseRemoteConfig.setDefaultsAsync(defaultConfigMap);
+        fetchConfig();
+     }
 
     @Override
     public boolean onCreateOptionsMenu(Menu menu) {
@@ -304,4 +315,48 @@ public class MainActivity extends AppCompatActivity {
             mChildEventListener = null;
         }
     }
-}
+
+    // Fetch the config to determine the allowed length  of messages.
+    public void fetchConfig() {
+        long cacheExpiration = 3600; // 1 hour in seconds
+        // If developer mode is enabled reduce cacheExpiration to 0 so that each fetch goes to the
+        // server. This should not be used in release builds.
+//        if (firebaseRemoteConfig.getInfo().getConfigSettings().isDeveloperModeEnabled()) {
+//            cacheExpiration = 0;
+//        }
+        firebaseRemoteConfig.fetch(cacheExpiration)
+                .addOnSuccessListener(new OnSuccessListener<Void>() {
+                    @Override
+                    public void onSuccess(Void aVoid) {
+                        // Make the fetched config available
+                        // via FirebaseRemoteConfig get<type> calls, e.g., getLong, getString.
+//                        firebaseRemoteConfig.activateFetched();
+                        firebaseRemoteConfig.activate();
+
+                        // Update the EditText length limit with
+                        // the newly retrieved values from Remote Config.
+                        applyRetrievedLengthLimit();
+                    }
+                })
+                .addOnFailureListener(new OnFailureListener() {
+                    @Override
+                    public void onFailure(@NonNull Exception e) {
+                        // An error occurred when fetching the config.
+                        Log.w(TAG, "Error fetching config", e);
+
+                        // Update the EditText length limit with
+                        // the newly retrieved values from Remote Config.
+                        applyRetrievedLengthLimit();
+                    }
+                });
+    }
+
+    /**
+     * Apply retrieved length limit to edit text field. This result may be fresh from the server or it may be from
+     * cached values.
+     */
+    private void applyRetrievedLengthLimit() {
+        Long friendly_msg_length = firebaseRemoteConfig.getLong(FRIENDLY_MSG_LENGTH_KEY);
+        mMessageEditText.setFilters(new InputFilter[]{new InputFilter.LengthFilter(friendly_msg_length.intValue())});
+        Log.d(TAG, FRIENDLY_MSG_LENGTH_KEY + " = " + friendly_msg_length);
+    }}
